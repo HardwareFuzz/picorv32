@@ -10,6 +10,7 @@
 #include "Vpicorv32_wrapper_picorv32_wrapper.h"
 #include "Vpicorv32_wrapper_axi4_memory.h"
 #include "verilated_vcd_c.h"
+#include "verilated_cov.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -229,6 +230,22 @@ int main(int argc, char **argv, char **env)
     printf("\nStarting simulation (timeout: %d cycles)...\n", timeout_cycles);
     printf("---------------------------------------------------\n\n");
 
+#if VM_COVERAGE
+    // Decide coverage output path; default to logs/coverage.dat, override with +covfile=<path>
+    std::string cov_path = "logs/coverage.dat";
+    if (const char* cov_arg = Verilated::commandArgsPlusMatch("covfile=")) {
+        const char* val = cov_arg + std::strlen("+covfile=");
+        if (*val) cov_path = val;
+    }
+    const auto slash_pos = cov_path.find_last_of('/');
+    if (slash_pos != std::string::npos && slash_pos != 0) {
+        Verilated::mkdir(cov_path.substr(0, slash_pos).c_str());
+    } else {
+        Verilated::mkdir("logs");
+    }
+    Verilated::threadContextp()->coveragep()->zero();
+#endif
+
     // Run simulation
     top->clk = 0;
     top->resetn = 0;
@@ -287,6 +304,11 @@ int main(int argc, char **argv, char **env)
     } else {
         printf("  Status: FINISHED\n");
     }
+
+#if VM_COVERAGE
+    Verilated::threadContextp()->coveragep()->write(cov_path.c_str());
+    printf("  Coverage: %s\n", cov_path.c_str());
+#endif
 
     delete top;
     return timed_out ? 2 : 0;

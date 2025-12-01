@@ -13,3 +13,7 @@ testbench_verilator
 testbench_verilator_dir/
 testbench_cli
 testbench_cli_dir/
+testbench_cli_cov
+testbench_cli_cov_dir/
+build_result/
+logs/
