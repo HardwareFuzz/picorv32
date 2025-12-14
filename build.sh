@@ -3,22 +3,25 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./build.sh [--coverage] [--no-coverage] [--clean] [--help] [-- extra_verilator_args...]
+Usage: ./build.sh [--coverage|--coverage-light|--no-coverage] [--clean] [--help] [-- extra_verilator_args...]
 
-Build the Verilator CLI testbench (testbench_cli). Pass --coverage to build a
-coverage-instrumented binary (testbench_cli_cov). Extra arguments after "--"
-are forwarded to the Verilator command.
+Build the Verilator CLI testbench (testbench_cli).
+  --coverage        : 全覆盖（Verilator --coverage，产物 picorv32_cov）
+  --coverage-light  : 轻覆盖（只行/用户覆盖，禁 toggle，产物 picorv32_cov_light）
+  --no-coverage     : 不启用覆盖（默认，产物 picorv32）
+Extra arguments after "--" are forwarded to the Verilator command.
 EOF
 }
 
-COVERAGE=0
+COVERAGE_MODE="none"   # none|full|light
 CLEAN=0
 EXTRA_VERILATOR_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --coverage|-c) COVERAGE=1 ;;
-        --no-coverage|-n) COVERAGE=0 ;;
+        --coverage|-c) COVERAGE_MODE="full" ;;
+        --coverage-light) COVERAGE_MODE="light" ;;
+        --no-coverage|-n) COVERAGE_MODE="none" ;;
         --clean) CLEAN=1 ;;
         --help|-h) usage; exit 0 ;;
         --) shift; EXTRA_VERILATOR_ARGS+=("$@"); break ;;
@@ -37,13 +40,20 @@ COMPRESSED_FLAG="${COMPRESSED_ISA/C/-DCOMPRESSED_ISA}"
 
 mkdir -p "$BUILD_ROOT"
 
-if (( COVERAGE )); then
-    OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_cov_dir}"
-    OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_cov}"
-else
-    OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_dir}"
-    OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32}"
-fi
+case "$COVERAGE_MODE" in
+    full)
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_cov_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_cov}"
+        ;;
+    light)
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_cov_light_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_cov_light}"
+        ;;
+    none)
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32}"
+        ;;
+esac
 
 if (( CLEAN )); then
     rm -rf "$OUT_DIR" "$OUT_BIN"
@@ -61,9 +71,11 @@ if [[ -n "$COMPRESSED_FLAG" ]]; then
     VERILATOR_CMD+=("$COMPRESSED_FLAG")
 fi
 
-if (( COVERAGE )); then
-    VERILATOR_CMD+=(--coverage)
-fi
+case "$COVERAGE_MODE" in
+    full) VERILATOR_CMD+=(--coverage) ;;
+    light) VERILATOR_CMD+=(--coverage-line --coverage-user --coverage-max-width 0) ;;
+    none) ;;
+esac
 
 VERILATOR_CMD+=("${EXTRA_VERILATOR_ARGS[@]}")
 
@@ -76,8 +88,11 @@ echo
 make -C "$OUT_DIR" -f "V${TOP_MODULE}.mk"
 cp "$OUT_DIR/V${TOP_MODULE}" "$OUT_BIN"
 
-if (( COVERAGE )); then
-    echo "Built coverage-enabled binary: $OUT_BIN (output dir: $OUT_DIR)"
-else
-    echo "Built binary: $OUT_BIN (output dir: $OUT_DIR)"
+echo "Built binary: $OUT_BIN (output dir: $OUT_DIR)"
+
+# Also copy to fuzz bin directory if present
+FUZZ_BIN_DIR="/home/canxin/Git/riscv_fuzz_test/riscv_impls_bins"
+if [[ -d "$FUZZ_BIN_DIR" ]]; then
+    cp -f "$OUT_BIN" "$FUZZ_BIN_DIR/$(basename "$OUT_BIN")"
+    echo "Copied to $FUZZ_BIN_DIR/$(basename "$OUT_BIN")"
 fi
