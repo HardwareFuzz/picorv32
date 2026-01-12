@@ -3,9 +3,10 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./build.sh [--coverage|--coverage-light|--no-coverage] [--clean] [--help] [-- extra_verilator_args...]
+Usage: ./build.sh [--coverage|--coverage-light|--no-coverage] [--cores N] [--clean] [--help] [-- extra_verilator_args...]
 
 Build the Verilator CLI testbench (testbench_cli).
+  --cores N          : set core count (default: 2)
   --coverage        : 全覆盖（Verilator --coverage，产物 picorv32_cov）
   --coverage-light  : 轻覆盖（只行/用户覆盖，禁 toggle，产物 picorv32_cov_light）
   --no-coverage     : 不启用覆盖（默认，产物 picorv32）
@@ -14,6 +15,7 @@ EOF
 }
 
 COVERAGE_MODE="none"   # none|full|light
+CORES="${CORES:-2}"
 CLEAN=0
 EXTRA_VERILATOR_ARGS=()
 
@@ -22,6 +24,7 @@ while [[ $# -gt 0 ]]; do
         --coverage|-c) COVERAGE_MODE="full" ;;
         --coverage-light) COVERAGE_MODE="light" ;;
         --no-coverage|-n) COVERAGE_MODE="none" ;;
+        --cores) CORES="$2"; shift ;;
         --clean) CLEAN=1 ;;
         --help|-h) usage; exit 0 ;;
         --) shift; EXTRA_VERILATOR_ARGS+=("$@"); break ;;
@@ -42,16 +45,16 @@ mkdir -p "$BUILD_ROOT"
 
 case "$COVERAGE_MODE" in
     full)
-        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_cov_dir}"
-        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_cov}"
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c_cov_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c_cov}"
         ;;
     light)
-        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_cov_light_dir}"
-        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_cov_light}"
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c_cov_light_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c_cov_light}"
         ;;
     none)
-        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_dir}"
-        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32}"
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c}"
         ;;
 esac
 
@@ -64,6 +67,7 @@ VERILATOR_CMD=(
     --top-module "$TOP_MODULE"
     "${SOURCES[@]}"
     -DVERBOSE_DEBUG -DREGS_INIT_ZERO=1
+    -GNUM_CORES="$CORES"
     --Mdir "$OUT_DIR"
 )
 
