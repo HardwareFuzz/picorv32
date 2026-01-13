@@ -3,17 +3,19 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./build.sh [--coverage|--coverage-light|--no-coverage] [--cores N] [--clean] [--help] [-- extra_verilator_args...]
+Usage: ./build.sh [--coverage|--coverage-light|--no-coverage] [--cores N] [--memorder ID] [--clean] [--help] [-- extra_verilator_args...]
 
 Build the Verilator CLI testbench (testbench_cli).
   --cores N          : set core count (default: 2)
   --coverage        : 全覆盖（Verilator --coverage，产物 picorv32_cov）
   --coverage-light  : 轻覆盖（只行/用户覆盖，禁 toggle，产物 picorv32_cov_light）
   --no-coverage     : 不启用覆盖（默认，产物 picorv32）
+  --memorder ID     : memorder 变体（default|sb|sb-bypass|sb-fence-nop）
 Extra arguments after "--" are forwarded to the Verilator command.
 EOF
 }
 
+MEMORDER="default"
 COVERAGE_MODE="none"   # none|full|light
 CORES="${CORES:-2}"
 CLEAN=0
@@ -25,6 +27,7 @@ while [[ $# -gt 0 ]]; do
         --coverage-light) COVERAGE_MODE="light" ;;
         --no-coverage|-n) COVERAGE_MODE="none" ;;
         --cores) CORES="$2"; shift ;;
+        --memorder) MEMORDER="$2"; shift ;;
         --clean) CLEAN=1 ;;
         --help|-h) usage; exit 0 ;;
         --) shift; EXTRA_VERILATOR_ARGS+=("$@"); break ;;
@@ -43,18 +46,23 @@ COMPRESSED_FLAG="${COMPRESSED_ISA/C/-DCOMPRESSED_ISA}"
 
 mkdir -p "$BUILD_ROOT"
 
+MEMORDER_TAG=""
+if [[ "$MEMORDER" != "default" ]]; then
+    MEMORDER_TAG="_${MEMORDER}"
+fi
+
 case "$COVERAGE_MODE" in
     full)
-        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c_cov_dir}"
-        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c_cov}"
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c${MEMORDER_TAG}_cov_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c${MEMORDER_TAG}_cov}"
         ;;
     light)
-        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c_cov_light_dir}"
-        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c_cov_light}"
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c${MEMORDER_TAG}_cov_light_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c${MEMORDER_TAG}_cov_light}"
         ;;
     none)
-        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c_dir}"
-        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c}"
+        OUT_DIR="${OUT_DIR:-$BUILD_ROOT/picorv32_${CORES}c${MEMORDER_TAG}_dir}"
+        OUT_BIN="${OUT_BIN:-$BUILD_ROOT/picorv32_${CORES}c${MEMORDER_TAG}}"
         ;;
 esac
 
@@ -71,9 +79,29 @@ VERILATOR_CMD=(
     --Mdir "$OUT_DIR"
 )
 
+MEMORDER_ARGS=()
+case "$MEMORDER" in
+    default) ;;
+    sb)
+        MEMORDER_ARGS+=(-GSTBUF_ENABLE=1)
+        ;;
+    sb-bypass)
+        MEMORDER_ARGS+=(-GSTBUF_ENABLE=1 -GSTBUF_ALLOW_LOAD_BYPASS=1 -GSTBUF_CONFLICT_STALL=1)
+        ;;
+    sb-fence-nop)
+        MEMORDER_ARGS+=(-GSTBUF_ENABLE=1 -GFENCE_DRAIN_STBUF=0)
+        ;;
+    *)
+        echo "Unknown --memorder variant: $MEMORDER" >&2
+        exit 1
+        ;;
+esac
+
 if [[ -n "$COMPRESSED_FLAG" ]]; then
     VERILATOR_CMD+=("$COMPRESSED_FLAG")
 fi
+
+VERILATOR_CMD+=("${MEMORDER_ARGS[@]}")
 
 case "$COVERAGE_MODE" in
     full) VERILATOR_CMD+=(--coverage) ;;

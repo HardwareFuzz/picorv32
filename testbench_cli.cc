@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <elf.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -156,6 +157,8 @@ int main(int argc, char **argv, char **env)
     // Parse command line arguments
     const char* elf_file = nullptr;
     int timeout_cycles = 1000000;
+    bool has_nohex = false;
+    bool has_firmware_plusarg = false;
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -169,6 +172,11 @@ int main(int argc, char **argv, char **env)
             }
         } else if (argv[i][0] == '+') {
             // Verilator plusargs - will be handled by Verilated::commandArgs
+            if (strcmp(argv[i], "+nohex") == 0) {
+                has_nohex = true;
+            } else if (strncmp(argv[i], "+firmware=", 10) == 0) {
+                has_firmware_plusarg = true;
+            }
             continue;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
@@ -191,7 +199,22 @@ int main(int argc, char **argv, char **env)
     }
 
     // Initialize Verilator
-    Verilated::commandArgs(argc, argv);
+    if (has_firmware_plusarg) {
+        fprintf(stderr, "Note: +firmware=... is ignored by testbench_cli (ELF load is used).\n");
+    }
+    std::vector<std::string> owned_args;
+    std::vector<const char*> verilator_args;
+    verilator_args.reserve(argc + 1);
+    verilator_args.push_back(argv[0]);
+    if (!has_nohex) {
+        owned_args.emplace_back("+nohex");
+        verilator_args.push_back(owned_args.back().c_str());
+    }
+    for (int i = 1; i < argc; i++) {
+        verilator_args.push_back(argv[i]);
+    }
+    Verilated::commandArgs((int)verilator_args.size(),
+                           const_cast<char**>(verilator_args.data()));
     Vpicorv32_wrapper* top = new Vpicorv32_wrapper;
 
     // Load ELF file into memory

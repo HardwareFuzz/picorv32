@@ -9,6 +9,7 @@
 *.vvp
 *.out
 firmware/firmware.*
+firmware/*.map
 testbench_verilator
 testbench_verilator_dir/
 testbench_cli

@@ -13,7 +13,7 @@
 ### 1. 编译调试版本
 
 ```bash
-cd /mnt/disk1/shared/git/picorv32
+cd /home/canxin/Git/riscv_research/picorv32
 make testbench_cli
 ```
 
@@ -43,8 +43,8 @@ make test-verbose
 
 ### 其他文件
 
-- **testbench_cli.cc**: CLI 测试台实现（未修改）
-- **testbench.v**: Testbench wrapper（未修改）
+- **testbench_cli.cc**: CLI 测试台实现（新增 `+nohex` 自动注入逻辑）
+- **testbench.v**: Testbench wrapper（新增 `+nohex` 可选跳过 hex 预加载）
 - **.gitignore**: 更新忽略规则
 
 ## 日志格式
@@ -106,6 +106,12 @@ make test-verbose | grep "REG_WRITE.*x10"
 ```bash
 ./testbench_cli +verbose --timeout=10000 your_program.elf > debug.log 2>&1
 ```
+
+### 关于固件加载
+
+`testbench_cli` 会从 ELF 直接加载内存，并自动注入 `+nohex` 来跳过 `testbench.v` 里的 `$readmemh` 预加载，避免覆盖 ELF 内容。因此：
+- 不需要再传 `+firmware=...`；
+- 即使传了 `+firmware=...` 也会被忽略（以 ELF 为准）。
 
 ### 分析日志
 

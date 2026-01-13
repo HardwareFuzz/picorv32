@@ -79,6 +79,10 @@ module picorv32 #(
 	parameter [ 0:0] COMPRESSED_ISA = 0,
 	parameter [ 0:0] CATCH_MISALIGN = 1,
 	parameter [ 0:0] CATCH_ILLINSN = 1,
+	parameter [ 0:0] STBUF_ENABLE = 0,
+	parameter [ 0:0] STBUF_ALLOW_LOAD_BYPASS = 0,
+	parameter [ 0:0] STBUF_CONFLICT_STALL = 1,
+	parameter [ 0:0] FENCE_DRAIN_STBUF = 1,
 	parameter [ 0:0] ENABLE_PCPI = 0,
 	parameter [ 0:0] ENABLE_MUL = 0,
 	parameter [ 0:0] ENABLE_FAST_MUL = 0,
@@ -364,6 +368,11 @@ module picorv32 #(
 	reg mem_do_rdata;
 	reg mem_do_wdata;
 
+	reg stbuf_valid;
+	reg [31:0] stbuf_addr;
+	reg [31:0] stbuf_wdata;
+	reg [ 3:0] stbuf_wstrb;
+
 	wire mem_xfer;
 	reg mem_la_secondword, mem_la_firstword_reg, last_mem_valid;
 	wire mem_la_firstword = COMPRESSED_ISA && (mem_do_prefetch || mem_do_rinst) && next_pc[1] && !mem_la_secondword;
@@ -379,14 +388,22 @@ module picorv32 #(
 	wire mem_la_use_prefetched_high_word = COMPRESSED_ISA && mem_la_firstword && prefetched_high_word && !clear_prefetched_high_word;
 	assign mem_xfer = (mem_valid && mem_ready) || (mem_la_use_prefetched_high_word && mem_do_rinst);
 
-	wire mem_busy = |{mem_do_prefetch, mem_do_rinst, mem_do_rdata, mem_do_wdata};
+	wire stbuf_issue = STBUF_ENABLE && stbuf_valid && !mem_state &&
+			!(mem_do_prefetch || mem_do_rinst || mem_do_rdata || mem_do_wdata);
+	wire stbuf_xfer = STBUF_ENABLE && stbuf_valid && mem_state == 2 && mem_xfer && !mem_do_wdata;
+	wire mem_do_wdata_eff = mem_do_wdata || stbuf_issue;
+	wire mem_busy = |{mem_do_prefetch, mem_do_rinst, mem_do_rdata, mem_do_wdata_eff};
 	wire mem_done = resetn && ((mem_xfer && |mem_state && (mem_do_rinst || mem_do_rdata || mem_do_wdata)) || (&mem_state && mem_do_rinst)) &&
 			(!mem_la_firstword || (~&mem_rdata_latched[1:0] && mem_xfer));
 
-	assign mem_la_write = resetn && !mem_state && mem_do_wdata;
+	assign mem_la_write = resetn && !mem_state && mem_do_wdata_eff;
 	assign mem_la_read = resetn && ((!mem_la_use_prefetched_high_word && !mem_state && (mem_do_rinst || mem_do_prefetch || mem_do_rdata)) ||
 			(COMPRESSED_ISA && mem_xfer && (!last_mem_valid ? mem_la_firstword : mem_la_firstword_reg) && !mem_la_secondword && &mem_rdata_latched[1:0]));
-	assign mem_la_addr = (mem_do_prefetch || mem_do_rinst) ? {next_pc[31:2] + mem_la_firstword_xfer, 2'b00} : {reg_op1[31:2], 2'b00};
+	wire [31:0] mem_la_addr_eff = stbuf_issue ? {stbuf_addr[31:2], 2'b00} :
+			((mem_do_prefetch || mem_do_rinst) ? {next_pc[31:2] + mem_la_firstword_xfer, 2'b00} : {reg_op1[31:2], 2'b00});
+	wire [31:0] mem_la_wdata_eff = stbuf_issue ? stbuf_wdata : mem_la_wdata;
+	wire [ 3:0] mem_la_wstrb_eff = stbuf_issue ? stbuf_wstrb : mem_la_wstrb;
+	assign mem_la_addr = mem_la_addr_eff;
 
 	assign mem_rdata_latched_noshuffle = (mem_xfer || LATCHED_MEM_RDATA) ? mem_rdata : mem_rdata_q;
 
@@ -435,7 +452,7 @@ module picorv32 #(
 	end
 
 	always @(posedge clk) begin
-		if (mem_xfer) begin
+		if (mem_xfer && (mem_do_rinst || mem_do_rdata || mem_do_prefetch)) begin
 			mem_rdata_q <= COMPRESSED_ISA ? mem_rdata_latched : mem_rdata;
 			next_insn_opcode <= COMPRESSED_ISA ? mem_rdata_latched : mem_rdata;
 		end
@@ -579,11 +596,11 @@ module picorv32 #(
 			prefetched_high_word <= 0;
 		end else begin
 			if (mem_la_read || mem_la_write) begin
-				mem_addr <= mem_la_addr;
-				mem_wstrb <= (store_misaligned ? 4'b0000 : mem_la_wstrb) & {4{mem_la_write}};
+				mem_addr <= mem_la_addr_eff;
+				mem_wstrb <= (store_misaligned ? 4'b0000 : mem_la_wstrb_eff) & {4{mem_la_write}};
 			end
 			if (mem_la_write) begin
-				mem_wdata <= mem_la_wdata;
+				mem_wdata <= mem_la_wdata_eff;
 			end
 			case (mem_state)
 				0: begin
@@ -593,7 +610,7 @@ module picorv32 #(
 						mem_wstrb <= 0;
 						mem_state <= 1;
 					end
-					if (mem_do_wdata) begin
+					if (mem_do_wdata_eff) begin
 						mem_valid <= 1;
 						mem_instr <= 0;
 						mem_state <= 2;
@@ -627,7 +644,7 @@ module picorv32 #(
 				end
 				2: begin
 					`assert(mem_wstrb != 0);
-					`assert(mem_do_wdata);
+					`assert(mem_do_wdata || (STBUF_ENABLE && stbuf_valid));
 					if (mem_xfer) begin
 						mem_valid <= 0;
 						mem_state <= 0;
@@ -1205,6 +1222,7 @@ module picorv32 #(
 	reg set_mem_do_rinst;
 	reg set_mem_do_rdata;
 	reg set_mem_do_wdata;
+	reg stbuf_enq;
 
 	reg latched_store;
 	reg latched_stalu;
@@ -1415,6 +1433,16 @@ module picorv32 #(
 	wire store_misaligned = CATCH_MISALIGN && resetn &&
 			((instr_sw && |mem_write_addr[1:0]) ||
 			 (instr_sh && mem_write_addr[0]));
+	wire [31:0] store_wdata = instr_sw ? reg_op2 :
+			instr_sh ? {2{reg_op2[15:0]}} :
+			{4{reg_op2[7:0]}};
+	wire [3:0] store_wstrb = instr_sw ? 4'b1111 :
+			instr_sh ? (mem_write_addr[1] ? 4'b1100 : 4'b0011) :
+			instr_sb ? (4'b0001 << mem_write_addr[1:0]) :
+			4'b0000;
+	wire stbuf_load_conflict = stbuf_valid && (mem_write_addr[31:2] == stbuf_addr[31:2]);
+	wire stbuf_load_block = STBUF_ENABLE && stbuf_valid &&
+			(!STBUF_ALLOW_LOAD_BYPASS || (STBUF_CONFLICT_STALL && stbuf_load_conflict));
 `ifdef VERBOSE_DEBUG
 	wire dbg_exception_misaligned_word = CATCH_MISALIGN && resetn &&
 			(mem_do_rdata || mem_do_wdata) &&
@@ -1445,6 +1473,7 @@ module picorv32 #(
 		set_mem_do_rinst = 0;
 		set_mem_do_rdata = 0;
 		set_mem_do_wdata = 0;
+		stbuf_enq = 0;
 
 		alu_out_0_q <= alu_out_0;
 		alu_out_q <= alu_out;
@@ -1507,6 +1536,7 @@ module picorv32 #(
 			reg_next_pc <= PROGADDR_RESET;
 			if (ENABLE_COUNTERS)
 				count_instr <= 0;
+			stbuf_valid <= 0;
 			latched_store <= 0;
 			latched_stalu <= 0;
 			latched_branch <= 0;
@@ -1688,6 +1718,14 @@ module picorv32 #(
 						endcase
 						latched_store <= 1;
 						cpu_state <= cpu_state_fetch;
+					end
+					instr_fence: begin
+						if (STBUF_ENABLE && FENCE_DRAIN_STBUF && stbuf_valid) begin
+							// wait for store buffer to drain
+						end else begin
+							latched_store <= 1;
+							cpu_state <= cpu_state_fetch;
+						end
 					end
 					is_lui_auipc_jal: begin
 						reg_op1 <= instr_lui ? 0 : reg_pc;
@@ -1928,12 +1966,18 @@ module picorv32 #(
 						end
 `endif
 						reg_op1 <= reg_op1 + decoded_imm;
-						set_mem_do_wdata = 1;
+						if (STBUF_ENABLE && !stbuf_valid && !store_misaligned) begin
+							stbuf_enq = 1;
+						end else if (!STBUF_ENABLE || !stbuf_valid) begin
+							set_mem_do_wdata = 1;
+						end
 					end
 					if (!mem_do_prefetch && mem_done) begin
 						cpu_state <= cpu_state_fetch;
 						decoder_trigger <= 1;
 						decoder_pseudo_trigger <= 1;
+					end else if (!mem_do_prefetch && stbuf_enq) begin
+						cpu_state <= cpu_state_fetch;
 					end
 				end
 			end
@@ -1942,21 +1986,23 @@ module picorv32 #(
 				latched_store <= 1;
 				if (!mem_do_prefetch || mem_done) begin
 					if (!mem_do_rdata) begin
-						(* parallel_case, full_case *)
-						case (1'b1)
-							instr_lb || instr_lbu: mem_wordsize <= 2;
-							instr_lh || instr_lhu: mem_wordsize <= 1;
-							instr_lw: mem_wordsize <= 0;
-						endcase
-						latched_is_lu <= is_lbu_lhu_lw;
-						latched_is_lh <= instr_lh;
-						latched_is_lb <= instr_lb;
-						if (ENABLE_TRACE) begin
-							trace_valid <= 1;
-							trace_data <= (irq_active ? TRACE_IRQ : 0) | TRACE_ADDR | ((reg_op1 + decoded_imm) & 32'hffffffff);
+						if (!(STBUF_ENABLE && stbuf_load_block)) begin
+							(* parallel_case, full_case *)
+							case (1'b1)
+								instr_lb || instr_lbu: mem_wordsize <= 2;
+								instr_lh || instr_lhu: mem_wordsize <= 1;
+								instr_lw: mem_wordsize <= 0;
+							endcase
+							latched_is_lu <= is_lbu_lhu_lw;
+							latched_is_lh <= instr_lh;
+							latched_is_lb <= instr_lb;
+							if (ENABLE_TRACE) begin
+								trace_valid <= 1;
+								trace_data <= (irq_active ? TRACE_IRQ : 0) | TRACE_ADDR | ((reg_op1 + decoded_imm) & 32'hffffffff);
+							end
+							reg_op1 <= reg_op1 + decoded_imm;
+							set_mem_do_rdata = 1;
 						end
-						reg_op1 <= reg_op1 + decoded_imm;
-						set_mem_do_rdata = 1;
 					end
 					if (!mem_do_prefetch && mem_done) begin
 						(* parallel_case, full_case *)
@@ -2020,6 +2066,15 @@ module picorv32 #(
 		end
 		if (!CATCH_ILLINSN && decoder_trigger_q && !decoder_pseudo_trigger_q && instr_ecall_ebreak) begin
 			cpu_state <= cpu_state_trap;
+		end
+
+		if (stbuf_xfer)
+			stbuf_valid <= 0;
+		if (stbuf_enq) begin
+			stbuf_valid <= 1;
+			stbuf_addr <= {mem_write_addr[31:2], 2'b00};
+			stbuf_wdata <= store_wdata;
+			stbuf_wstrb <= store_wstrb;
 		end
 
 		if (!resetn || mem_done) begin
@@ -2602,6 +2657,10 @@ module picorv32_axi #(
 	parameter [ 0:0] COMPRESSED_ISA = 0,
 	parameter [ 0:0] CATCH_MISALIGN = 1,
 	parameter [ 0:0] CATCH_ILLINSN = 1,
+	parameter [ 0:0] STBUF_ENABLE = 0,
+	parameter [ 0:0] STBUF_ALLOW_LOAD_BYPASS = 0,
+	parameter [ 0:0] STBUF_CONFLICT_STALL = 1,
+	parameter [ 0:0] FENCE_DRAIN_STBUF = 1,
 	parameter [ 0:0] ENABLE_PCPI = 0,
 	parameter [ 0:0] ENABLE_MUL = 0,
 	parameter [ 0:0] ENABLE_FAST_MUL = 0,
@@ -2733,6 +2792,10 @@ module picorv32_axi #(
 		.COMPRESSED_ISA      (COMPRESSED_ISA      ),
 		.CATCH_MISALIGN      (CATCH_MISALIGN      ),
 		.CATCH_ILLINSN       (CATCH_ILLINSN       ),
+		.STBUF_ENABLE        (STBUF_ENABLE        ),
+		.STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
+		.STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL),
+		.FENCE_DRAIN_STBUF   (FENCE_DRAIN_STBUF   ),
 		.ENABLE_PCPI         (ENABLE_PCPI         ),
 		.ENABLE_MUL          (ENABLE_MUL          ),
 		.ENABLE_FAST_MUL     (ENABLE_FAST_MUL     ),
@@ -2900,6 +2963,10 @@ module picorv32_wb #(
 	parameter [ 0:0] COMPRESSED_ISA = 0,
 	parameter [ 0:0] CATCH_MISALIGN = 1,
 	parameter [ 0:0] CATCH_ILLINSN = 1,
+	parameter [ 0:0] STBUF_ENABLE = 0,
+	parameter [ 0:0] STBUF_ALLOW_LOAD_BYPASS = 0,
+	parameter [ 0:0] STBUF_CONFLICT_STALL = 1,
+	parameter [ 0:0] FENCE_DRAIN_STBUF = 1,
 	parameter [ 0:0] ENABLE_PCPI = 0,
 	parameter [ 0:0] ENABLE_MUL = 0,
 	parameter [ 0:0] ENABLE_FAST_MUL = 0,
@@ -2997,6 +3064,10 @@ module picorv32_wb #(
 		.COMPRESSED_ISA      (COMPRESSED_ISA      ),
 		.CATCH_MISALIGN      (CATCH_MISALIGN      ),
 		.CATCH_ILLINSN       (CATCH_ILLINSN       ),
+		.STBUF_ENABLE        (STBUF_ENABLE        ),
+		.STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
+		.STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL),
+		.FENCE_DRAIN_STBUF   (FENCE_DRAIN_STBUF   ),
 		.ENABLE_PCPI         (ENABLE_PCPI         ),
 		.ENABLE_MUL          (ENABLE_MUL          ),
 		.ENABLE_FAST_MUL     (ENABLE_FAST_MUL     ),
