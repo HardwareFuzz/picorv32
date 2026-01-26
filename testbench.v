@@ -243,9 +243,82 @@ module picorv32_wrapper #(
 	wire [35:0] trace_data0;
 	wire [35:0] trace_data1;
 
-	assign trap = trap0 | trap1;
+	//
+	// Dual-core exit policy
+	//
+	// By default (NUM_CORES > 1), require BOTH cores to reach trap and PASS before
+	// finishing. This avoids false positives where one core exits early.
+	// Use +any_hart_exit to restore the old behavior (OR trap / single PASS).
+	reg require_all_harts;
+	initial begin
+		require_all_harts = (NUM_CORES > 1);
+		if ($test$plusargs("any_hart_exit"))
+			require_all_harts = 0;
+	end
+
+	wire trap_any = trap0 | trap1;
+	wire trap_all = (NUM_CORES > 1) ? (trap0 & trap1) : trap0;
+	assign trap = require_all_harts ? trap_all : trap_any;
 	assign trace_valid = trace_valid0;
 	assign trace_data = trace_data0;
+
+	// Track PASS writes per core so we can require both cores to pass.
+	// We attribute a PASS to a core when it completes a write transaction to
+	// 0x2000_0000 with magic value 123456789.
+	reg core0_passed, core1_passed;
+	reg core0_aw_seen, core0_w_seen;
+	reg core1_aw_seen, core1_w_seen;
+	reg [31:0] core0_awaddr, core0_wdata;
+	reg [31:0] core1_awaddr, core1_wdata;
+
+	always @(posedge clk) begin
+		if (!resetn) begin
+			core0_passed <= 0;
+			core1_passed <= 0;
+			core0_aw_seen <= 0;
+			core0_w_seen <= 0;
+			core1_aw_seen <= 0;
+			core1_w_seen <= 0;
+			core0_awaddr <= 0;
+			core0_wdata  <= 0;
+			core1_awaddr <= 0;
+			core1_wdata  <= 0;
+		end else begin
+			// Core 0
+			if (core0_axi_awvalid && core0_axi_awready) begin
+				core0_aw_seen <= 1;
+				core0_awaddr <= core0_axi_awaddr;
+			end
+			if (core0_axi_wvalid && core0_axi_wready) begin
+				core0_w_seen <= 1;
+				core0_wdata <= core0_axi_wdata;
+			end
+			// picoRV32 may not wait for AXI B responses (posted writes). Attribute PASS
+			// as soon as we have both AW and W handshakes for a transaction.
+			if (core0_aw_seen && core0_w_seen) begin
+				if (core0_awaddr == 32'h2000_0000 && core0_wdata == 32'd123456789)
+					core0_passed <= 1;
+				core0_aw_seen <= 0;
+				core0_w_seen <= 0;
+			end
+
+			// Core 1
+			if (core1_axi_awvalid && core1_axi_awready) begin
+				core1_aw_seen <= 1;
+				core1_awaddr <= core1_axi_awaddr;
+			end
+			if (core1_axi_wvalid && core1_axi_wready) begin
+				core1_w_seen <= 1;
+				core1_wdata <= core1_axi_wdata;
+			end
+			if (core1_aw_seen && core1_w_seen) begin
+				if (core1_awaddr == 32'h2000_0000 && core1_wdata == 32'd123456789)
+					core1_passed <= 1;
+				core1_aw_seen <= 0;
+				core1_w_seen <= 0;
+			end
+		end
+	end
 
 	wire        mem_axi_awvalid;
 	wire        mem_axi_awready;
@@ -592,6 +665,10 @@ module picorv32_wrapper #(
 	end
 
 	integer cycle_counter;
+	wire tests_passed_any = tests_passed;
+	wire tests_passed_all = (NUM_CORES > 1) ? (core0_passed & core1_passed) : core0_passed;
+	wire tests_passed_effective = require_all_harts ? tests_passed_all : tests_passed_any;
+
 	always @(posedge clk) begin
 		cycle_counter <= resetn ? cycle_counter + 1 : 0;
 		if (resetn && trap) begin
@@ -599,7 +676,7 @@ module picorv32_wrapper #(
 			repeat (10) @(posedge clk);
 `endif
 			$display("TRAP after %1d clock cycles", cycle_counter);
-			if (tests_passed) begin
+			if (tests_passed_effective) begin
 				$display("ALL TESTS PASSED.");
 				$finish;
 			end else begin
