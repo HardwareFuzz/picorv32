@@ -20,7 +20,7 @@ EOF
 }
 
 ISA=""
-CORES="1"
+CORES="2"
 OUT_DIR_OPT=""
 COVERAGE_MODE="none"   # none|full|light
 CLEAN=0
@@ -78,9 +78,8 @@ if [[ ! "$CORES" =~ ^[0-9]+$ ]] || [[ "$CORES" -lt 1 ]]; then
 	exit 2
 fi
 
-if [[ "$CORES" -ne 1 ]]; then
-	echo "This branch supports --cores 1 only (requested: $CORES)." >&2
-	echo "Use cx-2hart-build for --cores 2." >&2
+if [[ "$CORES" -ne 2 ]]; then
+	echo "Unsupported --cores for PicoRV32 2hart harness: $CORES (supported: 2)" >&2
 	exit 1
 fi
 
@@ -116,6 +115,7 @@ VERILATOR_CMD=(
 	--top-module "$TOP_MODULE"
 	"${SOURCES[@]}"
 	-DVERBOSE_DEBUG -DREGS_INIT_ZERO=1
+	-GNUM_CORES="$CORES"
 	--Mdir "$MDIR"
 )
 
