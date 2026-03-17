@@ -247,10 +247,14 @@ module picorv32_wrapper #(
 `endif
 
 	reg [1023:0] firmware_file;
+	reg skip_firmware_load;
 	initial begin
-		if (!$value$plusargs("firmware=%s", firmware_file))
-			firmware_file = "firmware/firmware.hex";
-		$readmemh(firmware_file, mem.memory);
+		skip_firmware_load = $test$plusargs("nohex");
+		if (!skip_firmware_load) begin
+			if (!$value$plusargs("firmware=%s", firmware_file))
+				firmware_file = "firmware/firmware.hex";
+			$readmemh(firmware_file, mem.memory);
+		end
 	end
 
 	integer cycle_counter;
@@ -306,6 +310,7 @@ module axi4_memory #(
 	output reg        tests_passed
 );
 	reg [31:0]   memory [0:128*1024/4-1] /* verilator public */;
+	reg [31:0]   pass_reg;
 	reg verbose;
 	initial verbose = $test$plusargs("verbose") || VERBOSE;
 
@@ -319,6 +324,7 @@ module axi4_memory #(
 		mem_axi_arready = 0;
 		mem_axi_rvalid = 0;
 		tests_passed = 0;
+		pass_reg = 0;
 	end
 
 	reg [63:0] xorshift64_state = 64'd88172645463325252;
@@ -387,6 +393,10 @@ module axi4_memory #(
 			mem_axi_rdata <= memory[latched_raddr >> 2];
 			mem_axi_rvalid <= 1;
 			latched_raddr_en = 0;
+		end else if (latched_raddr == 32'h2000_0000) begin
+			mem_axi_rdata <= pass_reg;
+			mem_axi_rvalid <= 1;
+			latched_raddr_en = 0;
 		end else begin
 			$display("OUT-OF-BOUNDS MEMORY READ FROM %08x", latched_raddr);
 			$finish;
@@ -416,6 +426,7 @@ module axi4_memory #(
 			end
 		end else
 		if (latched_waddr == 32'h2000_0000) begin
+			pass_reg <= latched_wdata;
 			if (latched_wdata == 123456789)
 				tests_passed = 1;
 		end else begin

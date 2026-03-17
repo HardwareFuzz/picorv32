@@ -1,0 +1,14 @@
+# Build outputs
+*.o
+*.elf
+*.hex
+*.bin
+*.dis
+
+# Linker script
+linker.ld
+
+# Test outputs
+testbench.vcd
+testbench.trace
+test_output.log

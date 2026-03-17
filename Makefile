@@ -84,6 +84,18 @@ testbench_verilator: testbench.v picorv32.v testbench.cc
 	$(MAKE) -C testbench_verilator_dir -f Vpicorv32_wrapper.mk
 	cp testbench_verilator_dir/Vpicorv32_wrapper testbench_verilator
 
+testbench_cli: testbench.v picorv32.v testbench_cli.cc
+	$(VERILATOR) --cc --exe -Wno-lint -trace --top-module picorv32_wrapper testbench.v picorv32.v testbench_cli.cc \
+			$(subst C,-DCOMPRESSED_ISA,$(COMPRESSED_ISA)) -DVERBOSE_DEBUG -DREGS_INIT_ZERO=1 --Mdir testbench_cli_dir
+	$(MAKE) -C testbench_cli_dir -f Vpicorv32_wrapper.mk
+	cp testbench_cli_dir/Vpicorv32_wrapper testbench_cli
+
+test_cli: testbench_cli firmware/firmware.elf
+	./testbench_cli firmware/firmware.elf
+
+test_cli_vcd: testbench_cli firmware/firmware.elf
+	./testbench_cli +vcd firmware/firmware.elf
+
 check: check-yices
 
 check-%: check.smt2
@@ -179,6 +191,7 @@ clean:
 		firmware/firmware.elf firmware/firmware.bin firmware/firmware.hex firmware/firmware.map \
 		testbench.vvp testbench_sp.vvp testbench_synth.vvp testbench_ez.vvp \
 		testbench_rvf.vvp testbench_wb.vvp testbench.vcd testbench.trace \
-		testbench_verilator testbench_verilator_dir
+		testbench_verilator testbench_verilator_dir \
+		testbench_cli testbench_cli_dir
 
-.PHONY: test test_vcd test_sp test_axi test_wb test_wb_vcd test_ez test_ez_vcd test_synth download-tools build-tools toc clean
+.PHONY: test test_vcd test_sp test_axi test_wb test_wb_vcd test_ez test_ez_vcd test_synth test_cli test_cli_vcd download-tools build-tools toc clean
