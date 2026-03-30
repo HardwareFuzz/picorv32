@@ -149,6 +149,8 @@ module picorv32 #(
 	output reg [ 3:0] rvfi_mem_wmask,
 	output reg [31:0] rvfi_mem_rdata,
 	output reg [31:0] rvfi_mem_wdata,
+	output reg [63:0] rvfi_ext_clk_start,
+	output reg [63:0] rvfi_ext_clk_end,
 
 	output reg [63:0] rvfi_csr_mcycle_rmask,
 	output reg [63:0] rvfi_csr_mcycle_wmask,
@@ -186,6 +188,10 @@ module picorv32 #(
 	reg [31:0] next_insn_opcode;
 	reg [31:0] dbg_insn_opcode;
 	reg [31:0] dbg_insn_addr;
+`ifdef RISCV_FORMAL
+	reg [63:0] rvfi_trace_cycle;
+	reg [63:0] dbg_insn_start_cycle;
+`endif
 
 	wire dbg_mem_valid = mem_valid;
 	wire dbg_mem_instr = mem_instr;
@@ -2060,6 +2066,8 @@ module picorv32 #(
 	always @(posedge clk) begin
 		rvfi_valid <= resetn && (launch_next_insn || trap) && dbg_valid_insn;
 		rvfi_order <= resetn ? rvfi_order + rvfi_valid : 0;
+		rvfi_ext_clk_start <= dbg_insn_start_cycle;
+		rvfi_ext_clk_end <= resetn ? rvfi_trace_cycle + 64'd1 : 64'd0;
 
 		rvfi_insn <= dbg_insn_opcode;
 		rvfi_rs1_addr <= dbg_rs1val_valid ? dbg_insn_rs1 : 0;
@@ -2076,7 +2084,16 @@ module picorv32 #(
 		if (!resetn) begin
 			dbg_irq_call <= 0;
 			dbg_irq_enter <= 0;
+			rvfi_trace_cycle <= 0;
+			dbg_insn_start_cycle <= 0;
+			rvfi_ext_clk_start <= 0;
+			rvfi_ext_clk_end <= 0;
 		end else
+		begin
+			rvfi_trace_cycle <= rvfi_trace_cycle + 64'd1;
+			if (launch_next_insn)
+				dbg_insn_start_cycle <= rvfi_trace_cycle + 64'd1;
+		end
 		if (rvfi_valid) begin
 			dbg_irq_call <= 0;
 			dbg_irq_enter <= dbg_irq_call;
@@ -2681,6 +2698,8 @@ module picorv32_axi #(
 	output [ 3:0] rvfi_mem_wmask,
 	output [31:0] rvfi_mem_rdata,
 	output [31:0] rvfi_mem_wdata,
+	output [63:0] rvfi_ext_clk_start,
+	output [63:0] rvfi_ext_clk_end,
 `endif
 
 	// Trace Interface
@@ -2795,6 +2814,8 @@ module picorv32_axi #(
 		.rvfi_mem_wmask(rvfi_mem_wmask),
 		.rvfi_mem_rdata(rvfi_mem_rdata),
 		.rvfi_mem_wdata(rvfi_mem_wdata),
+		.rvfi_ext_clk_start(rvfi_ext_clk_start),
+		.rvfi_ext_clk_end(rvfi_ext_clk_end),
 `endif
 
 		.trace_valid(trace_valid),
@@ -2967,6 +2988,8 @@ module picorv32_wb #(
 	output [ 3:0] rvfi_mem_wmask,
 	output [31:0] rvfi_mem_rdata,
 	output [31:0] rvfi_mem_wdata,
+	output [63:0] rvfi_ext_clk_start,
+	output [63:0] rvfi_ext_clk_end,
 `endif
 
 	// Trace Interface
@@ -3059,6 +3082,8 @@ module picorv32_wb #(
 		.rvfi_mem_wmask(rvfi_mem_wmask),
 		.rvfi_mem_rdata(rvfi_mem_rdata),
 		.rvfi_mem_wdata(rvfi_mem_wdata),
+		.rvfi_ext_clk_start(rvfi_ext_clk_start),
+		.rvfi_ext_clk_end(rvfi_ext_clk_end),
 `endif
 
 		.trace_valid(trace_valid),

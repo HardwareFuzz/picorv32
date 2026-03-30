@@ -102,7 +102,7 @@ VERILATOR_CMD=(
 	"$VERILATOR" --cc --exe -Wno-lint --trace
 	--top-module "$TOP_MODULE"
 	"${SOURCES[@]}"
-	-DVERBOSE_DEBUG -DREGS_INIT_ZERO=1
+	-DVERBOSE_DEBUG -DREGS_INIT_ZERO=1 -DRISCV_FORMAL
 	--Mdir "$OUT_DIR"
 )
 
