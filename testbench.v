@@ -493,6 +493,23 @@ module picorv32_wrapper #(
 	wire [3:0]  rvfi_mem_wmask;
 	wire [31:0] rvfi_mem_rdata;
 	wire [31:0] rvfi_mem_wdata;
+	wire [63:0] rvfi_ext_clk_start;
+	wire [63:0] rvfi_ext_clk_end;
+
+	wire        rvfi1_valid;
+	wire [31:0] rvfi1_insn;
+	wire        rvfi1_trap;
+	wire        rvfi1_intr;
+	wire [4:0]  rvfi1_rd_addr;
+	wire [31:0] rvfi1_rd_wdata;
+	wire [31:0] rvfi1_pc_rdata;
+	wire [31:0] rvfi1_mem_addr;
+	wire [3:0]  rvfi1_mem_rmask;
+	wire [3:0]  rvfi1_mem_wmask;
+	wire [31:0] rvfi1_mem_rdata;
+	wire [31:0] rvfi1_mem_wdata;
+	wire [63:0] rvfi1_ext_clk_start;
+	wire [63:0] rvfi1_ext_clk_end;
 `endif
 
 	picorv32_axi #(
@@ -550,6 +567,8 @@ module picorv32_wrapper #(
 		.rvfi_mem_wmask (rvfi_mem_wmask ),
 		.rvfi_mem_rdata (rvfi_mem_rdata ),
 		.rvfi_mem_wdata (rvfi_mem_wdata ),
+		.rvfi_ext_clk_start(rvfi_ext_clk_start),
+		.rvfi_ext_clk_end(rvfi_ext_clk_end),
 `endif
 		.trace_valid    (trace_valid0   ),
 		.trace_data     (trace_data0    )
@@ -591,31 +610,34 @@ module picorv32_wrapper #(
 		.mem_axi_rdata  (core1_axi_rdata  ),
 		.irq            (irq            ),
 `ifdef RISCV_FORMAL
-		.rvfi_valid     (/* unused */   ),
-		.rvfi_order     (/* unused */   ),
-		.rvfi_insn      (/* unused */   ),
-		.rvfi_trap      (/* unused */   ),
-		.rvfi_halt      (/* unused */   ),
-		.rvfi_intr      (/* unused */   ),
-		.rvfi_rs1_addr  (/* unused */   ),
-		.rvfi_rs2_addr  (/* unused */   ),
-		.rvfi_rs1_rdata (/* unused */   ),
-		.rvfi_rs2_rdata (/* unused */   ),
-		.rvfi_rd_addr   (/* unused */   ),
-		.rvfi_rd_wdata  (/* unused */   ),
-		.rvfi_pc_rdata  (/* unused */   ),
-		.rvfi_pc_wdata  (/* unused */   ),
-		.rvfi_mem_addr  (/* unused */   ),
-		.rvfi_mem_rmask (/* unused */   ),
-		.rvfi_mem_wmask (/* unused */   ),
-		.rvfi_mem_rdata (/* unused */   ),
-		.rvfi_mem_wdata (/* unused */   ),
+			.rvfi_valid     (rvfi1_valid    ),
+			.rvfi_order     (/* unused */   ),
+			.rvfi_insn      (rvfi1_insn     ),
+			.rvfi_trap      (rvfi1_trap     ),
+			.rvfi_halt      (/* unused */   ),
+			.rvfi_intr      (rvfi1_intr     ),
+			.rvfi_rs1_addr  (/* unused */   ),
+			.rvfi_rs2_addr  (/* unused */   ),
+			.rvfi_rs1_rdata (/* unused */   ),
+			.rvfi_rs2_rdata (/* unused */   ),
+			.rvfi_rd_addr   (rvfi1_rd_addr  ),
+			.rvfi_rd_wdata  (rvfi1_rd_wdata ),
+			.rvfi_pc_rdata  (rvfi1_pc_rdata ),
+			.rvfi_pc_wdata  (/* unused */   ),
+			.rvfi_mem_addr  (rvfi1_mem_addr ),
+			.rvfi_mem_rmask (rvfi1_mem_rmask),
+			.rvfi_mem_wmask (rvfi1_mem_wmask),
+			.rvfi_mem_rdata (rvfi1_mem_rdata),
+			.rvfi_mem_wdata (rvfi1_mem_wdata),
+			.rvfi_ext_clk_start(rvfi1_ext_clk_start),
+			.rvfi_ext_clk_end(rvfi1_ext_clk_end),
 `endif
-		.trace_valid    (trace_valid1   ),
-		.trace_data     (trace_data1    )
-	);
+			.trace_valid    (trace_valid1   ),
+			.trace_data     (trace_data1    )
+		);
 
 `ifdef RISCV_FORMAL
+`ifdef PICORV32_INCLUDE_RVFIMON
 	picorv32_rvfimon rvfi_monitor (
 		.clock          (clk           ),
 		.reset          (!resetn       ),
@@ -640,6 +662,7 @@ module picorv32_wrapper #(
 		.rvfi_mem_wdata (rvfi_mem_wdata)
 	);
 `endif
+`endif
 
 	reg [1023:0] firmware_file;
 	reg skip_firmware_load;
@@ -656,6 +679,68 @@ module picorv32_wrapper #(
 	wire tests_passed_any = tests_passed;
 	wire tests_passed_all = (NUM_CORES > 1) ? (core0_passed & core1_passed) : core0_passed;
 	wire tests_passed_effective = require_all_harts ? tests_passed_all : tests_passed_any;
+`ifdef RISCV_FORMAL
+	integer rich_trace_file;
+	reg rich_trace_enable;
+	reg [1023:0] rich_trace_path;
+
+	task automatic write_rich_trace;
+		input integer hart_id;
+		input [31:0] pc;
+		input [31:0] insn;
+		input [63:0] clk_start;
+		input [63:0] clk_end;
+		input [4:0] rd_addr;
+		input [31:0] rd_wdata;
+		input [31:0] mem_addr;
+		input [31:0] mem_wdata;
+		input [31:0] mem_rdata;
+		input [3:0] mem_wmask;
+		input [3:0] mem_rmask;
+		input trap_flag;
+		input intr_flag;
+	begin
+		$fwrite(rich_trace_file, "pc=0x%08x insn=0x%08x hart=%0d clk_start=%0d clk_end=%0d clk_span=%0d",
+			pc, insn, hart_id, clk_start, clk_end, clk_end - clk_start + 1);
+		if (rd_addr != 0)
+			$fwrite(rich_trace_file, " rd=x%0d rd_wdata=0x%08x", rd_addr, rd_wdata);
+		if (mem_wmask != 0)
+			$fwrite(rich_trace_file, " memw_addr=0x%08x memw_data=0x%08x memw_mask=0x%0x",
+				mem_addr, mem_wdata, mem_wmask);
+		if (mem_rmask != 0)
+			$fwrite(rich_trace_file, " memr_addr=0x%08x memr_data=0x%08x memr_mask=0x%0x",
+				mem_addr, mem_rdata, mem_rmask);
+		if (trap_flag || intr_flag)
+			$fwrite(rich_trace_file, " trap=%0d intr=%0d", trap_flag, intr_flag);
+		$fwrite(rich_trace_file, "\n");
+	end
+	endtask
+
+	initial begin
+		rich_trace_enable = $test$plusargs("richlog");
+		rich_trace_file = 0;
+		if (rich_trace_enable) begin
+			if (!$value$plusargs("richlog_file=%s", rich_trace_path))
+				rich_trace_path = "testbench.richtrace";
+			rich_trace_file = $fopen(rich_trace_path, "w");
+			if (rich_trace_file)
+				$fwrite(rich_trace_file, "pc insn hart clk_start clk_end clk_span side_effects\n");
+		end
+	end
+
+	always @(posedge clk) begin
+		if (resetn && rich_trace_enable && rich_trace_file) begin
+			if (rvfi_valid)
+				write_rich_trace(0, rvfi_pc_rdata, rvfi_insn, rvfi_ext_clk_start, rvfi_ext_clk_end,
+					rvfi_rd_addr, rvfi_rd_wdata, rvfi_mem_addr, rvfi_mem_wdata, rvfi_mem_rdata,
+					rvfi_mem_wmask, rvfi_mem_rmask, rvfi_trap, rvfi_intr);
+			if (rvfi1_valid)
+				write_rich_trace(1, rvfi1_pc_rdata, rvfi1_insn, rvfi1_ext_clk_start, rvfi1_ext_clk_end,
+					rvfi1_rd_addr, rvfi1_rd_wdata, rvfi1_mem_addr, rvfi1_mem_wdata, rvfi1_mem_rdata,
+					rvfi1_mem_wmask, rvfi1_mem_rmask, rvfi1_trap, rvfi1_intr);
+		end
+	end
+`endif
 
 	always @(posedge clk) begin
 		cycle_counter <= resetn ? cycle_counter + 1 : 0;
