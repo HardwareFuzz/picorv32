@@ -158,6 +158,8 @@ module picorv32_wrapper #(
 	wire [3:0]  rvfi_mem_wmask;
 	wire [31:0] rvfi_mem_rdata;
 	wire [31:0] rvfi_mem_wdata;
+	wire [63:0] rvfi_ext_clk_start;
+	wire [63:0] rvfi_ext_clk_end;
 `endif
 
 	picorv32_axi #(
@@ -215,12 +217,15 @@ module picorv32_wrapper #(
 		.rvfi_mem_wmask (rvfi_mem_wmask ),
 		.rvfi_mem_rdata (rvfi_mem_rdata ),
 		.rvfi_mem_wdata (rvfi_mem_wdata ),
+		.rvfi_ext_clk_start(rvfi_ext_clk_start),
+		.rvfi_ext_clk_end(rvfi_ext_clk_end),
 `endif
 		.trace_valid    (trace_valid    ),
 		.trace_data     (trace_data     )
 	);
 
 `ifdef RISCV_FORMAL
+`ifdef PICORV32_INCLUDE_RVFIMON
 	picorv32_rvfimon rvfi_monitor (
 		.clock          (clk           ),
 		.reset          (!resetn       ),
@@ -245,6 +250,7 @@ module picorv32_wrapper #(
 		.rvfi_mem_wdata (rvfi_mem_wdata)
 	);
 `endif
+`endif
 
 	reg [1023:0] firmware_file;
 	reg skip_firmware_load;
@@ -258,6 +264,43 @@ module picorv32_wrapper #(
 	end
 
 	integer cycle_counter;
+`ifdef RISCV_FORMAL
+	integer rich_trace_file;
+	reg rich_trace_enable;
+	reg [1023:0] rich_trace_path;
+
+	initial begin
+		rich_trace_enable = $test$plusargs("richlog");
+		rich_trace_file = 0;
+		if (rich_trace_enable) begin
+			if (!$value$plusargs("richlog_file=%s", rich_trace_path))
+				rich_trace_path = "testbench.richtrace";
+			rich_trace_file = $fopen(rich_trace_path, "w");
+			if (rich_trace_file)
+				$fwrite(rich_trace_file, "pc insn clk_start clk_end clk_span side_effects\n");
+		end
+	end
+
+	always @(posedge clk) begin
+		if (resetn && rvfi_valid && rich_trace_enable && rich_trace_file) begin
+			$fwrite(rich_trace_file, "pc=0x%08x insn=0x%08x clk_start=%0d clk_end=%0d clk_span=%0d",
+				rvfi_pc_rdata, rvfi_insn, rvfi_ext_clk_start, rvfi_ext_clk_end,
+				rvfi_ext_clk_end - rvfi_ext_clk_start + 1);
+			if (rvfi_rd_addr != 0)
+				$fwrite(rich_trace_file, " rd=x%0d rd_wdata=0x%08x", rvfi_rd_addr, rvfi_rd_wdata);
+			if (rvfi_mem_wmask != 0)
+				$fwrite(rich_trace_file, " memw_addr=0x%08x memw_data=0x%08x memw_mask=0x%0x",
+					rvfi_mem_addr, rvfi_mem_wdata, rvfi_mem_wmask);
+			if (rvfi_mem_rmask != 0)
+				$fwrite(rich_trace_file, " memr_addr=0x%08x memr_data=0x%08x memr_mask=0x%0x",
+					rvfi_mem_addr, rvfi_mem_rdata, rvfi_mem_rmask);
+			if (rvfi_trap || rvfi_intr)
+				$fwrite(rich_trace_file, " trap=%0d intr=%0d", rvfi_trap, rvfi_intr);
+			$fwrite(rich_trace_file, "\n");
+		end
+	end
+`endif
+
 	always @(posedge clk) begin
 		cycle_counter <= resetn ? cycle_counter + 1 : 0;
 		if (resetn && trap) begin
