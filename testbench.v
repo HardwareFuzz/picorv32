@@ -267,7 +267,7 @@ module picorv32_wrapper #(
 `ifdef RISCV_FORMAL
 	integer rich_trace_file;
 	reg rich_trace_enable;
-	reg [1023:0] rich_trace_path;
+	reg [4095:0] rich_trace_path;
 
 	initial begin
 		rich_trace_enable = $test$plusargs("richlog");
