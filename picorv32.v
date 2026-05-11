@@ -1421,9 +1421,10 @@ module picorv32 #(
 	assign launch_next_insn = cpu_state == cpu_state_fetch && decoder_trigger && (!ENABLE_IRQ || irq_delay || irq_active || !(irq_pending & ~irq_mask));
 
 	wire [31:0] mem_write_addr = reg_op1 + decoded_imm;
+	wire [31:0] mem_store_addr_check = mem_do_wdata ? reg_op1 : mem_write_addr;
 	wire store_misaligned = CATCH_MISALIGN && resetn &&
-			((instr_sw && |mem_write_addr[1:0]) ||
-			 (instr_sh && mem_write_addr[0]));
+			((instr_sw && |mem_store_addr_check[1:0]) ||
+			 (instr_sh && mem_store_addr_check[0]));
 `ifdef VERBOSE_DEBUG
 	wire dbg_exception_misaligned_word = CATCH_MISALIGN && resetn &&
 			(mem_do_rdata || mem_do_wdata) &&
