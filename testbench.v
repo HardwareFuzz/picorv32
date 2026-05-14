@@ -520,11 +520,15 @@ module picorv32_wrapper #(
 `ifdef COMPRESSED_ISA
 		.COMPRESSED_ISA(1),
 `endif
-		.ENABLE_MUL(1),
-		.ENABLE_DIV(1),
-		.ENABLE_IRQ(1),
-		.ENABLE_TRACE(1)
+			.ENABLE_MUL(1),
+			.ENABLE_DIV(1),
+			.ENABLE_IRQ(1),
+			.ENABLE_TRACE(1),
+			.LOG_HART_TAG_ENABLE(1),
+			.LOG_HART_ID(0),
 `endif
+			.PROGADDR_RESET(32'h0000_0000),
+			.PROGADDR_IRQ(32'h0000_0010)
 	) uut0 (
 		.clk            (clk               ),
 		.resetn         (resetn            ),
@@ -582,11 +586,15 @@ module picorv32_wrapper #(
 `ifdef COMPRESSED_ISA
 		.COMPRESSED_ISA(1),
 `endif
-		.ENABLE_MUL(1),
-		.ENABLE_DIV(1),
-		.ENABLE_IRQ(1),
-		.ENABLE_TRACE(1)
+			.ENABLE_MUL(1),
+			.ENABLE_DIV(1),
+			.ENABLE_IRQ(1),
+			.ENABLE_TRACE(1),
+			.LOG_HART_TAG_ENABLE(1),
+			.LOG_HART_ID(1),
 `endif
+			.PROGADDR_RESET(32'h0000_0800),
+			.PROGADDR_IRQ(32'h0000_0810)
 	) uut1 (
 		.clk            (clk               ),
 		.resetn         (resetn            ),
@@ -680,11 +688,7 @@ module picorv32_wrapper #(
 	wire tests_passed_all = (NUM_CORES > 1) ? (core0_passed & core1_passed) : core0_passed;
 	wire tests_passed_effective = require_all_harts ? tests_passed_all : tests_passed_any;
 `ifdef RISCV_FORMAL
-	integer rich_trace_file;
-	reg rich_trace_enable;
-	reg [1023:0] rich_trace_path;
-
-	task automatic write_rich_trace;
+	task automatic write_rvfi_stdout;
 		input integer hart_id;
 		input [31:0] pc;
 		input [31:0] insn;
@@ -700,42 +704,30 @@ module picorv32_wrapper #(
 		input trap_flag;
 		input intr_flag;
 	begin
-		$fwrite(rich_trace_file, "pc=0x%08x insn=0x%08x hart=%0d clk_start=%0d clk_end=%0d clk_span=%0d",
-			pc, insn, hart_id, clk_start, clk_end, clk_end - clk_start + 1);
+		$write("RVFI: hart=%0d pc=0x%08x insn=0x%08x clk_start=%0d clk_end=%0d clk_span=%0d",
+			hart_id, pc, insn, clk_start, clk_end, clk_end - clk_start + 1);
 		if (rd_addr != 0)
-			$fwrite(rich_trace_file, " rd=x%0d rd_wdata=0x%08x", rd_addr, rd_wdata);
+			$write(" rd=x%0d rd_wdata=0x%08x", rd_addr, rd_wdata);
 		if (mem_wmask != 0)
-			$fwrite(rich_trace_file, " memw_addr=0x%08x memw_data=0x%08x memw_mask=0x%0x",
+			$write(" memw_addr=0x%08x memw_data=0x%08x memw_mask=0x%0x",
 				mem_addr, mem_wdata, mem_wmask);
 		if (mem_rmask != 0)
-			$fwrite(rich_trace_file, " memr_addr=0x%08x memr_data=0x%08x memr_mask=0x%0x",
+			$write(" memr_addr=0x%08x memr_data=0x%08x memr_mask=0x%0x",
 				mem_addr, mem_rdata, mem_rmask);
 		if (trap_flag || intr_flag)
-			$fwrite(rich_trace_file, " trap=%0d intr=%0d", trap_flag, intr_flag);
-		$fwrite(rich_trace_file, "\n");
+			$write(" trap=%0d intr=%0d", trap_flag, intr_flag);
+		$write("\n");
 	end
 	endtask
 
-	initial begin
-		rich_trace_enable = $test$plusargs("richlog");
-		rich_trace_file = 0;
-		if (rich_trace_enable) begin
-			if (!$value$plusargs("richlog_file=%s", rich_trace_path))
-				rich_trace_path = "testbench.richtrace";
-			rich_trace_file = $fopen(rich_trace_path, "w");
-			if (rich_trace_file)
-				$fwrite(rich_trace_file, "pc insn hart clk_start clk_end clk_span side_effects\n");
-		end
-	end
-
 	always @(posedge clk) begin
-		if (resetn && rich_trace_enable && rich_trace_file) begin
+		if (resetn) begin
 			if (rvfi_valid)
-				write_rich_trace(0, rvfi_pc_rdata, rvfi_insn, rvfi_ext_clk_start, rvfi_ext_clk_end,
+				write_rvfi_stdout(0, rvfi_pc_rdata, rvfi_insn, rvfi_ext_clk_start, rvfi_ext_clk_end,
 					rvfi_rd_addr, rvfi_rd_wdata, rvfi_mem_addr, rvfi_mem_wdata, rvfi_mem_rdata,
 					rvfi_mem_wmask, rvfi_mem_rmask, rvfi_trap, rvfi_intr);
 			if (rvfi1_valid)
-				write_rich_trace(1, rvfi1_pc_rdata, rvfi1_insn, rvfi1_ext_clk_start, rvfi1_ext_clk_end,
+				write_rvfi_stdout(1, rvfi1_pc_rdata, rvfi1_insn, rvfi1_ext_clk_start, rvfi1_ext_clk_end,
 					rvfi1_rd_addr, rvfi1_rd_wdata, rvfi1_mem_addr, rvfi1_mem_wdata, rvfi1_mem_rdata,
 					rvfi1_mem_wmask, rvfi1_mem_rmask, rvfi1_trap, rvfi1_intr);
 		end
