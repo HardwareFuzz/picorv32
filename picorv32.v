@@ -88,10 +88,12 @@ module picorv32 #(
 	parameter [ 0:0] ENABLE_IRQ_TIMER = 1,
 	parameter [ 0:0] ENABLE_TRACE = 0,
 	parameter [ 0:0] REGS_INIT_ZERO = 0,
+	parameter [ 0:0] LOG_HART_TAG_ENABLE = 0,
 	parameter [31:0] MASKED_IRQ = 32'h 0000_0000,
 	parameter [31:0] LATCHED_IRQ = 32'h ffff_ffff,
 	parameter [31:0] PROGADDR_RESET = 32'h 0000_0000,
 	parameter [31:0] PROGADDR_IRQ = 32'h 0000_0010,
+	parameter [31:0] LOG_HART_ID = 0,
 	parameter [31:0] STACKADDR = 32'h ffff_ffff
 ) (
 	input clk, resetn,
@@ -1353,8 +1355,11 @@ module picorv32 #(
 	always @(posedge clk) begin
 		if (resetn && cpuregs_write && latched_rd) begin
 `ifdef VERBOSE_DEBUG
-			if (!(dbg_exception_latched || dbg_exception_event))
-				$display("REG_WRITE: x%-2d <= 0x%08x  (PC=0x%08x INSN=0x%08x)", latched_rd, cpuregs_wrdata, dbg_insn_addr, dbg_insn_opcode);
+				if (!(dbg_exception_latched || dbg_exception_event))
+					if (LOG_HART_TAG_ENABLE)
+						$display("REG_WRITE: hart=%0d x%-2d <= 0x%08x  (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, latched_rd, cpuregs_wrdata, dbg_insn_addr, dbg_insn_opcode);
+					else
+						$display("REG_WRITE: x%-2d <= 0x%08x  (PC=0x%08x INSN=0x%08x)", latched_rd, cpuregs_wrdata, dbg_insn_addr, dbg_insn_opcode);
 `endif
 `ifdef PICORV32_TESTBUG_001
 			cpuregs[latched_rd ^ 1] <= cpuregs_wrdata;
@@ -1543,7 +1548,10 @@ module picorv32 #(
 		(* parallel_case, full_case *)
 		case (cpu_state)
 			cpu_state_trap: begin
-				`verbose_debug($display("TRAP: Entering trap state (PC=0x%08x INSN=0x%08x)", reg_pc, dbg_insn_opcode);)
+				`verbose_debug(if (LOG_HART_TAG_ENABLE)
+					$display("TRAP: hart=%0d Entering trap state (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_pc, dbg_insn_opcode);
+				else
+					$display("TRAP: Entering trap state (PC=0x%08x INSN=0x%08x)", reg_pc, dbg_insn_opcode);)
 				trap <= 1;
 			end
 
@@ -1664,7 +1672,10 @@ module picorv32 #(
 								if (CATCH_ILLINSN && (pcpi_timeout || instr_ecall_ebreak)) begin
 									pcpi_valid <= 0;
 									`debug($display("EBREAK OR UNSUPPORTED INSN AT 0x%08x", reg_pc);)
-									`verbose_debug($display("EXCEPTION: EBREAK/UNSUPPORTED (PC=0x%08x INSN=0x%08x)", reg_pc, dbg_insn_opcode);)
+									`verbose_debug(if (LOG_HART_TAG_ENABLE)
+										$display("EXCEPTION: hart=%0d EBREAK/UNSUPPORTED (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_pc, dbg_insn_opcode);
+									else
+										$display("EXCEPTION: EBREAK/UNSUPPORTED (PC=0x%08x INSN=0x%08x)", reg_pc, dbg_insn_opcode);)
 									if (ENABLE_IRQ && !irq_mask[irq_ebreak] && !irq_active) begin
 										next_irq_pending[irq_ebreak] = 1;
 										cpu_state <= cpu_state_fetch;
@@ -1676,7 +1687,10 @@ module picorv32 #(
 							end
 						end else begin
 							`debug($display("EBREAK OR UNSUPPORTED INSN AT 0x%08x", reg_pc);)
-							`verbose_debug($display("EXCEPTION: EBREAK/UNSUPPORTED (PC=0x%08x INSN=0x%08x)", reg_pc, dbg_insn_opcode);)
+							`verbose_debug(if (LOG_HART_TAG_ENABLE)
+								$display("EXCEPTION: hart=%0d EBREAK/UNSUPPORTED (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_pc, dbg_insn_opcode);
+							else
+								$display("EXCEPTION: EBREAK/UNSUPPORTED (PC=0x%08x INSN=0x%08x)", reg_pc, dbg_insn_opcode);)
 							if (ENABLE_IRQ && !irq_mask[irq_ebreak] && !irq_active) begin
 								next_irq_pending[irq_ebreak] = 1;
 								cpu_state <= cpu_state_fetch;
@@ -1928,14 +1942,23 @@ module picorv32 #(
 							trace_data <= (irq_active ? TRACE_IRQ : 0) | TRACE_ADDR | ((reg_op1 + decoded_imm) & 32'hffffffff);
 						end
 `ifdef VERBOSE_DEBUG
-						if (!dbg_suppress_mem_write) begin
-							if (instr_sb)
-								$display("MEM_WRITE: ADDR=0x%08x DATA=0x%02x SIZE=1 (PC=0x%08x INSN=0x%08x)", reg_op1 + decoded_imm, reg_op2[7:0], dbg_insn_addr, dbg_insn_opcode);
-							else if (instr_sh)
-								$display("MEM_WRITE: ADDR=0x%08x DATA=0x%04x SIZE=2 (PC=0x%08x INSN=0x%08x)", reg_op1 + decoded_imm, reg_op2[15:0], dbg_insn_addr, dbg_insn_opcode);
-							else
-								$display("MEM_WRITE: ADDR=0x%08x DATA=0x%08x SIZE=4 (PC=0x%08x INSN=0x%08x)", reg_op1 + decoded_imm, reg_op2, dbg_insn_addr, dbg_insn_opcode);
-						end
+							if (!dbg_suppress_mem_write) begin
+								if (instr_sb)
+									if (LOG_HART_TAG_ENABLE)
+										$display("MEM_WRITE: hart=%0d ADDR=0x%08x DATA=0x%02x SIZE=1 (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_op1 + decoded_imm, reg_op2[7:0], dbg_insn_addr, dbg_insn_opcode);
+									else
+										$display("MEM_WRITE: ADDR=0x%08x DATA=0x%02x SIZE=1 (PC=0x%08x INSN=0x%08x)", reg_op1 + decoded_imm, reg_op2[7:0], dbg_insn_addr, dbg_insn_opcode);
+								else if (instr_sh)
+									if (LOG_HART_TAG_ENABLE)
+										$display("MEM_WRITE: hart=%0d ADDR=0x%08x DATA=0x%04x SIZE=2 (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_op1 + decoded_imm, reg_op2[15:0], dbg_insn_addr, dbg_insn_opcode);
+									else
+										$display("MEM_WRITE: ADDR=0x%08x DATA=0x%04x SIZE=2 (PC=0x%08x INSN=0x%08x)", reg_op1 + decoded_imm, reg_op2[15:0], dbg_insn_addr, dbg_insn_opcode);
+								else
+									if (LOG_HART_TAG_ENABLE)
+										$display("MEM_WRITE: hart=%0d ADDR=0x%08x DATA=0x%08x SIZE=4 (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_op1 + decoded_imm, reg_op2, dbg_insn_addr, dbg_insn_opcode);
+									else
+										$display("MEM_WRITE: ADDR=0x%08x DATA=0x%08x SIZE=4 (PC=0x%08x INSN=0x%08x)", reg_op1 + decoded_imm, reg_op2, dbg_insn_addr, dbg_insn_opcode);
+							end
 `endif
 						reg_op1 <= reg_op1 + decoded_imm;
 						set_mem_do_wdata = 1;
@@ -1999,7 +2022,10 @@ module picorv32 #(
 				latched_is_lb <= 0;
 				latched_rd <= 0;
 				`debug($display("MISALIGNED WORD: 0x%08x", reg_op1);)
-				`verbose_debug($display("EXCEPTION: MISALIGNED_WORD ADDR=0x%08x (PC=0x%08x INSN=0x%08x)", reg_op1, reg_pc, dbg_insn_opcode);)
+					`verbose_debug(if (LOG_HART_TAG_ENABLE)
+						$display("EXCEPTION: hart=%0d MISALIGNED_WORD ADDR=0x%08x (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_op1, reg_pc, dbg_insn_opcode);
+					else
+						$display("EXCEPTION: MISALIGNED_WORD ADDR=0x%08x (PC=0x%08x INSN=0x%08x)", reg_op1, reg_pc, dbg_insn_opcode);)
 				if (ENABLE_IRQ && !irq_mask[irq_buserror] && !irq_active) begin
 					next_irq_pending[irq_buserror] = 1;
 				end else
@@ -2013,7 +2039,10 @@ module picorv32 #(
 				latched_is_lb <= 0;
 				latched_rd <= 0;
 				`debug($display("MISALIGNED HALFWORD: 0x%08x", reg_op1);)
-				`verbose_debug($display("EXCEPTION: MISALIGNED_HALFWORD ADDR=0x%08x (PC=0x%08x INSN=0x%08x)", reg_op1, reg_pc, dbg_insn_opcode);)
+					`verbose_debug(if (LOG_HART_TAG_ENABLE)
+						$display("EXCEPTION: hart=%0d MISALIGNED_HALFWORD ADDR=0x%08x (PC=0x%08x INSN=0x%08x)", LOG_HART_ID, reg_op1, reg_pc, dbg_insn_opcode);
+					else
+						$display("EXCEPTION: MISALIGNED_HALFWORD ADDR=0x%08x (PC=0x%08x INSN=0x%08x)", reg_op1, reg_pc, dbg_insn_opcode);)
 				if (ENABLE_IRQ && !irq_mask[irq_buserror] && !irq_active) begin
 					next_irq_pending[irq_buserror] = 1;
 				end else
@@ -2022,7 +2051,10 @@ module picorv32 #(
 		end
 		if (CATCH_MISALIGN && resetn && mem_do_rinst && (COMPRESSED_ISA ? reg_pc[0] : |reg_pc[1:0])) begin
 			`debug($display("MISALIGNED INSTRUCTION: 0x%08x", reg_pc);)
-			`verbose_debug($display("EXCEPTION: MISALIGNED_INSTRUCTION (PC=0x%08x)", reg_pc);)
+			`verbose_debug(if (LOG_HART_TAG_ENABLE)
+				$display("EXCEPTION: hart=%0d MISALIGNED_INSTRUCTION (PC=0x%08x)", LOG_HART_ID, reg_pc);
+			else
+				$display("EXCEPTION: MISALIGNED_INSTRUCTION (PC=0x%08x)", reg_pc);)
 			if (ENABLE_IRQ && !irq_mask[irq_buserror] && !irq_active) begin
 				next_irq_pending[irq_buserror] = 1;
 			end else
@@ -2632,10 +2664,12 @@ module picorv32_axi #(
 	parameter [ 0:0] ENABLE_IRQ_TIMER = 1,
 	parameter [ 0:0] ENABLE_TRACE = 0,
 	parameter [ 0:0] REGS_INIT_ZERO = 0,
+	parameter [ 0:0] LOG_HART_TAG_ENABLE = 0,
 	parameter [31:0] MASKED_IRQ = 32'h 0000_0000,
 	parameter [31:0] LATCHED_IRQ = 32'h ffff_ffff,
 	parameter [31:0] PROGADDR_RESET = 32'h 0000_0000,
 	parameter [31:0] PROGADDR_IRQ = 32'h 0000_0010,
+	parameter [31:0] LOG_HART_ID = 0,
 	parameter [31:0] STACKADDR = 32'h ffff_ffff
 ) (
 	input clk, resetn,
@@ -2762,15 +2796,17 @@ module picorv32_axi #(
 		.ENABLE_DIV          (ENABLE_DIV          ),
 		.ENABLE_IRQ          (ENABLE_IRQ          ),
 		.ENABLE_IRQ_QREGS    (ENABLE_IRQ_QREGS    ),
-		.ENABLE_IRQ_TIMER    (ENABLE_IRQ_TIMER    ),
-		.ENABLE_TRACE        (ENABLE_TRACE        ),
-		.REGS_INIT_ZERO      (REGS_INIT_ZERO      ),
-		.MASKED_IRQ          (MASKED_IRQ          ),
-		.LATCHED_IRQ         (LATCHED_IRQ         ),
-		.PROGADDR_RESET      (PROGADDR_RESET      ),
-		.PROGADDR_IRQ        (PROGADDR_IRQ        ),
-		.STACKADDR           (STACKADDR           )
-	) picorv32_core (
+			.ENABLE_IRQ_TIMER    (ENABLE_IRQ_TIMER    ),
+			.ENABLE_TRACE        (ENABLE_TRACE        ),
+			.REGS_INIT_ZERO      (REGS_INIT_ZERO      ),
+			.LOG_HART_TAG_ENABLE (LOG_HART_TAG_ENABLE ),
+			.MASKED_IRQ          (MASKED_IRQ          ),
+			.LATCHED_IRQ         (LATCHED_IRQ         ),
+			.PROGADDR_RESET      (PROGADDR_RESET      ),
+			.PROGADDR_IRQ        (PROGADDR_IRQ        ),
+			.LOG_HART_ID         (LOG_HART_ID         ),
+			.STACKADDR           (STACKADDR           )
+		) picorv32_core (
 		.clk      (clk   ),
 		.resetn   (resetn),
 		.trap     (trap  ),
@@ -2934,10 +2970,12 @@ module picorv32_wb #(
 	parameter [ 0:0] ENABLE_IRQ_TIMER = 1,
 	parameter [ 0:0] ENABLE_TRACE = 0,
 	parameter [ 0:0] REGS_INIT_ZERO = 0,
+	parameter [ 0:0] LOG_HART_TAG_ENABLE = 0,
 	parameter [31:0] MASKED_IRQ = 32'h 0000_0000,
 	parameter [31:0] LATCHED_IRQ = 32'h ffff_ffff,
 	parameter [31:0] PROGADDR_RESET = 32'h 0000_0000,
 	parameter [31:0] PROGADDR_IRQ = 32'h 0000_0010,
+	parameter [31:0] LOG_HART_ID = 0,
 	parameter [31:0] STACKADDR = 32'h ffff_ffff
 ) (
 	output trap,
@@ -3030,15 +3068,17 @@ module picorv32_wb #(
 		.ENABLE_DIV          (ENABLE_DIV          ),
 		.ENABLE_IRQ          (ENABLE_IRQ          ),
 		.ENABLE_IRQ_QREGS    (ENABLE_IRQ_QREGS    ),
-		.ENABLE_IRQ_TIMER    (ENABLE_IRQ_TIMER    ),
-		.ENABLE_TRACE        (ENABLE_TRACE        ),
-		.REGS_INIT_ZERO      (REGS_INIT_ZERO      ),
-		.MASKED_IRQ          (MASKED_IRQ          ),
-		.LATCHED_IRQ         (LATCHED_IRQ         ),
-		.PROGADDR_RESET      (PROGADDR_RESET      ),
-		.PROGADDR_IRQ        (PROGADDR_IRQ        ),
-		.STACKADDR           (STACKADDR           )
-	) picorv32_core (
+			.ENABLE_IRQ_TIMER    (ENABLE_IRQ_TIMER    ),
+			.ENABLE_TRACE        (ENABLE_TRACE        ),
+			.REGS_INIT_ZERO      (REGS_INIT_ZERO      ),
+			.LOG_HART_TAG_ENABLE (LOG_HART_TAG_ENABLE ),
+			.MASKED_IRQ          (MASKED_IRQ          ),
+			.LATCHED_IRQ         (LATCHED_IRQ         ),
+			.PROGADDR_RESET      (PROGADDR_RESET      ),
+			.PROGADDR_IRQ        (PROGADDR_IRQ        ),
+			.LOG_HART_ID         (LOG_HART_ID         ),
+			.STACKADDR           (STACKADDR           )
+		) picorv32_core (
 		.clk      (clk   ),
 		.resetn   (resetn),
 		.trap     (trap  ),
