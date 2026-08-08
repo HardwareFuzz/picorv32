@@ -497,6 +497,7 @@ module picorv32_wrapper #(
 	wire [63:0] rvfi_ext_clk_end;
 
 	wire        rvfi1_valid;
+	wire [63:0] rvfi1_order;
 	wire [31:0] rvfi1_insn;
 	wire        rvfi1_trap;
 	wire        rvfi1_intr;
@@ -510,6 +511,13 @@ module picorv32_wrapper #(
 	wire [31:0] rvfi1_mem_wdata;
 	wire [63:0] rvfi1_ext_clk_start;
 	wire [63:0] rvfi1_ext_clk_end;
+
+	wire [63:0] rvfi_ext_token = uut0.picorv32_core.rvfi_ext_token;
+	wire [63:0] rvfi_ext_instret_seq = uut0.picorv32_core.rvfi_ext_instret_seq;
+	wire        rvfi_ext_retired = uut0.picorv32_core.rvfi_ext_retired;
+	wire [63:0] rvfi1_ext_token = uut1.picorv32_core.rvfi_ext_token;
+	wire [63:0] rvfi1_ext_instret_seq = uut1.picorv32_core.rvfi_ext_instret_seq;
+	wire        rvfi1_ext_retired = uut1.picorv32_core.rvfi_ext_retired;
 `endif
 
 	picorv32_axi #(
@@ -619,7 +627,7 @@ module picorv32_wrapper #(
 		.irq            (irq            ),
 `ifdef RISCV_FORMAL
 			.rvfi_valid     (rvfi1_valid    ),
-			.rvfi_order     (/* unused */   ),
+			.rvfi_order     (rvfi1_order    ),
 			.rvfi_insn      (rvfi1_insn     ),
 			.rvfi_trap      (rvfi1_trap     ),
 			.rvfi_halt      (/* unused */   ),
@@ -694,6 +702,10 @@ module picorv32_wrapper #(
 		input [31:0] insn;
 		input [63:0] clk_start;
 		input [63:0] clk_end;
+		input [63:0] token;
+		input [63:0] term_seq;
+		input [63:0] instret_seq;
+		input retired_flag;
 		input [4:0] rd_addr;
 		input [31:0] rd_wdata;
 		input [31:0] mem_addr;
@@ -706,6 +718,12 @@ module picorv32_wrapper #(
 	begin
 		$write("RVFI: hart=%0d pc=0x%08x insn=0x%08x clk_start=%0d clk_end=%0d clk_span=%0d",
 			hart_id, pc, insn, clk_start, clk_end, clk_end - clk_start + 1);
+		$write(" token=%0d term_seq=%0d instret_seq=%0d retired=%0d trap=%0d intr=%0d start_kind=backend_alloc",
+			token, term_seq, instret_seq, retired_flag, trap_flag, intr_flag);
+		if (trap_flag)
+			$write(" end_kind=precise_trap");
+		else
+			$write(" end_kind=arch_commit");
 		if (rd_addr != 0)
 			$write(" rd=x%0d rd_wdata=0x%08x", rd_addr, rd_wdata);
 		if (mem_wmask != 0)
@@ -715,19 +733,45 @@ module picorv32_wrapper #(
 			$write(" memr_addr=0x%08x memr_data=0x%08x memr_mask=0x%0x",
 				mem_addr, mem_rdata, mem_rmask);
 		if (trap_flag || intr_flag)
-			$write(" trap=%0d intr=%0d", trap_flag, intr_flag);
+			$write(" terminal_interrupt_context=%0d", intr_flag);
 		$write("\n");
+		$write("CXTRACE v=2 event=inst_terminal core=picorv32 hart=%0d token=%0d term_seq=%0d ",
+			hart_id, token, term_seq);
+		if (trap_flag)
+			$write("instret_seq=- ");
+		else
+			$write("instret_seq=%0d ", instret_seq);
+		$write("commit_slot=0 pc=0x%08x insn=0x%08x insn_len=%0d start_cycle=%0d end_cycle=%0d span=%0d start_kind=backend_alloc ",
+			pc, insn, insn[1:0] == 2'b11 ? 4 : 2, clk_start, clk_end,
+			clk_end - clk_start + 1);
+		if (trap_flag)
+			$write("end_kind=precise_trap retired=0 trap=1 cause=%0d priv=3\n",
+				insn == 32'h00100073 || insn[15:0] == 16'h9002 ? 3 :
+				insn == 32'h00000073 ? 11 :
+				insn[6:0] == 7'b0000011 ? 4 :
+				insn[6:0] == 7'b0100011 ? 6 : 2);
+		else
+			$write("end_kind=arch_commit retired=1 trap=0 cause=none priv=3\n");
+		if (intr_flag)
+			$display("CXTRACE v=2 event=interrupt core=picorv32 hart=%0d cycle=%0d cause=0x8000000b context_token=%0d",
+				hart_id, clk_start, token);
+		if (clk_start == 0 || clk_end < clk_start)
+			$error("PicoRV32 hart %0d RVFI interval is invalid for token %0d", hart_id, token);
 	end
 	endtask
+
+	initial $display("CXTRACE_HEADER v=2 core=picorv32 harts=2 isa=rv32 build_config=dual_axi_shared_memory cycle_domain=core_ref_clk cycle_base=first_post_reset_posedge_is_1 interval=inclusive start_kind=backend_alloc end_kind=arch_commit_or_precise_trap");
 
 	always @(posedge clk) begin
 		if (resetn) begin
 			if (rvfi_valid)
 				write_rvfi_stdout(0, rvfi_pc_rdata, rvfi_insn, rvfi_ext_clk_start, rvfi_ext_clk_end,
+					rvfi_ext_token, rvfi_order, rvfi_ext_instret_seq, rvfi_ext_retired,
 					rvfi_rd_addr, rvfi_rd_wdata, rvfi_mem_addr, rvfi_mem_wdata, rvfi_mem_rdata,
 					rvfi_mem_wmask, rvfi_mem_rmask, rvfi_trap, rvfi_intr);
 			if (rvfi1_valid)
 				write_rvfi_stdout(1, rvfi1_pc_rdata, rvfi1_insn, rvfi1_ext_clk_start, rvfi1_ext_clk_end,
+					rvfi1_ext_token, rvfi1_order, rvfi1_ext_instret_seq, rvfi1_ext_retired,
 					rvfi1_rd_addr, rvfi1_rd_wdata, rvfi1_mem_addr, rvfi1_mem_wdata, rvfi1_mem_rdata,
 					rvfi1_mem_wmask, rvfi1_mem_rmask, rvfi1_trap, rvfi1_intr);
 		end
