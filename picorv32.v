@@ -193,6 +193,15 @@ module picorv32 #(
 `ifdef RISCV_FORMAL
 	reg [63:0] rvfi_trace_cycle;
 	reg [63:0] dbg_insn_start_cycle;
+	// Trace-only dynamic identity. PicoRV32 has a single in-flight
+	// architectural instruction, so the token allocated at launch can be
+	// carried in one register until the matching RVFI terminal event.
+	reg [63:0] dbg_next_alloc_token;
+	reg [63:0] dbg_insn_token;
+	reg [63:0] rvfi_ext_token /* verilator public_flat */;
+	reg [63:0] rvfi_ext_instret_seq /* verilator public_flat */;
+	reg [63:0] rvfi_instret_seq_next;
+	reg        rvfi_ext_retired /* verilator public_flat */;
 `endif
 
 	wire dbg_mem_valid = mem_valid;
@@ -2101,6 +2110,9 @@ module picorv32 #(
 		rvfi_order <= resetn ? rvfi_order + rvfi_valid : 0;
 		rvfi_ext_clk_start <= dbg_insn_start_cycle;
 		rvfi_ext_clk_end <= resetn ? rvfi_trace_cycle + 64'd1 : 64'd0;
+		rvfi_ext_token <= dbg_insn_token;
+		rvfi_ext_instret_seq <= rvfi_instret_seq_next;
+		rvfi_ext_retired <= !trap;
 
 		rvfi_insn <= dbg_insn_opcode;
 		rvfi_rs1_addr <= dbg_rs1val_valid ? dbg_insn_rs1 : 0;
@@ -2119,14 +2131,32 @@ module picorv32 #(
 			dbg_irq_enter <= 0;
 			rvfi_trace_cycle <= 0;
 			dbg_insn_start_cycle <= 0;
+			dbg_next_alloc_token <= 0;
+			dbg_insn_token <= 0;
+			rvfi_ext_token <= 0;
+			rvfi_ext_instret_seq <= 0;
+			rvfi_instret_seq_next <= 0;
+			rvfi_ext_retired <= 0;
 			rvfi_ext_clk_start <= 0;
 			rvfi_ext_clk_end <= 0;
 		end else
 		begin
 			rvfi_trace_cycle <= rvfi_trace_cycle + 64'd1;
-			if (launch_next_insn)
+			if (launch_next_insn) begin
 				dbg_insn_start_cycle <= rvfi_trace_cycle + 64'd1;
+				dbg_insn_token <= dbg_next_alloc_token;
+				dbg_next_alloc_token <= dbg_next_alloc_token + 64'd1;
+			end
+			if ((launch_next_insn || trap) && dbg_valid_insn && !trap)
+				rvfi_instret_seq_next <= rvfi_instret_seq_next + 64'd1;
 		end
+
+		// The registered RVFI record is observed one cycle after its terminal
+		// edge.  Its inclusive backend residency interval must always be valid.
+		if (rvfi_valid && (rvfi_ext_clk_start == 0 ||
+		                   rvfi_ext_clk_end < rvfi_ext_clk_start))
+			$error("PicoRV32 trace timing invariant failed: token=%0d start=%0d end=%0d",
+			       rvfi_ext_token, rvfi_ext_clk_start, rvfi_ext_clk_end);
 		if (rvfi_valid) begin
 			dbg_irq_call <= 0;
 			dbg_irq_enter <= dbg_irq_call;

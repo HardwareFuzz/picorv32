@@ -160,6 +160,9 @@ module picorv32_wrapper #(
 	wire [31:0] rvfi_mem_wdata;
 	wire [63:0] rvfi_ext_clk_start;
 	wire [63:0] rvfi_ext_clk_end;
+	wire [63:0] rvfi_ext_token = uut.picorv32_core.rvfi_ext_token;
+	wire [63:0] rvfi_ext_instret_seq = uut.picorv32_core.rvfi_ext_instret_seq;
+	wire        rvfi_ext_retired = uut.picorv32_core.rvfi_ext_retired;
 `endif
 
 	picorv32_axi #(
@@ -265,11 +268,20 @@ module picorv32_wrapper #(
 
 	integer cycle_counter;
 `ifdef RISCV_FORMAL
+	initial $display("CXTRACE_HEADER v=2 core=picorv32 harts=1 isa=rv32 build_config=picorv32_axi_default cycle_domain=core_ref_clk cycle_base=first_post_reset_posedge_is_1 interval=inclusive start_kind=backend_alloc end_kind=arch_commit_or_precise_trap");
+
 	always @(posedge clk) begin
 		if (resetn && rvfi_valid) begin
 			$write("RVFI: hart=0 pc=0x%08x insn=0x%08x clk_start=%0d clk_end=%0d clk_span=%0d",
 				rvfi_pc_rdata, rvfi_insn, rvfi_ext_clk_start, rvfi_ext_clk_end,
 				rvfi_ext_clk_end - rvfi_ext_clk_start + 1);
+			$write(" token=%0d term_seq=%0d instret_seq=%0d retired=%0d trap=%0d intr=%0d start_kind=backend_alloc",
+				rvfi_ext_token, rvfi_order, rvfi_ext_instret_seq, rvfi_ext_retired,
+				rvfi_trap, rvfi_intr);
+			if (rvfi_trap)
+				$write(" end_kind=precise_trap");
+			else
+				$write(" end_kind=arch_commit");
 			if (rvfi_rd_addr != 0)
 				$write(" rd=x%0d rd_wdata=0x%08x", rvfi_rd_addr, rvfi_rd_wdata);
 			if (rvfi_mem_wmask != 0)
@@ -279,8 +291,31 @@ module picorv32_wrapper #(
 				$write(" memr_addr=0x%08x memr_data=0x%08x memr_mask=0x%0x",
 					rvfi_mem_addr, rvfi_mem_rdata, rvfi_mem_rmask);
 			if (rvfi_trap || rvfi_intr)
-				$write(" trap=%0d intr=%0d", rvfi_trap, rvfi_intr);
+				$write(" terminal_interrupt_context=%0d", rvfi_intr);
 			$write("\n");
+			$write("CXTRACE v=2 event=inst_terminal core=picorv32 hart=0 token=%0d term_seq=%0d ",
+				rvfi_ext_token, rvfi_order);
+			if (rvfi_trap)
+				$write("instret_seq=- ");
+			else
+				$write("instret_seq=%0d ", rvfi_ext_instret_seq);
+			$write("commit_slot=0 pc=0x%08x insn=0x%08x insn_len=%0d start_cycle=%0d end_cycle=%0d span=%0d start_kind=backend_alloc ",
+				rvfi_pc_rdata, rvfi_insn, rvfi_insn[1:0] == 2'b11 ? 4 : 2,
+				rvfi_ext_clk_start, rvfi_ext_clk_end,
+				rvfi_ext_clk_end - rvfi_ext_clk_start + 1);
+			if (rvfi_trap)
+				$write("end_kind=precise_trap retired=0 trap=1 cause=%0d priv=3\n",
+					rvfi_insn == 32'h00100073 || rvfi_insn[15:0] == 16'h9002 ? 3 :
+					rvfi_insn == 32'h00000073 ? 11 :
+					rvfi_insn[6:0] == 7'b0000011 ? 4 :
+					rvfi_insn[6:0] == 7'b0100011 ? 6 : 2);
+			else
+				$write("end_kind=arch_commit retired=1 trap=0 cause=none priv=3\n");
+			if (rvfi_intr)
+				$display("CXTRACE v=2 event=interrupt core=picorv32 hart=0 cycle=%0d cause=0x8000000b context_token=%0d",
+					rvfi_ext_clk_start, rvfi_ext_token);
+			if (rvfi_ext_clk_start == 0 || rvfi_ext_clk_end < rvfi_ext_clk_start)
+				$error("PicoRV32 RVFI interval is invalid for token %0d", rvfi_ext_token);
 		end
 	end
 `endif
